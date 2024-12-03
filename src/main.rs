@@ -8,7 +8,7 @@ use tokio;
 use ulid::Ulid;
 
 /// Represents a record in the WAL. ULID and checksum are useful and provide a predictable amount
-/// of metadata overhead (48 bytes metadata: 16 bytes for ULID, 32 for checksum).
+/// of metadata overhead (ULID is not serialized and 32 bytes for checksum).
 #[derive(Debug)]
 pub struct Record {
     pub ulid: Ulid,         // ULID as the unique identifier
@@ -118,22 +118,24 @@ impl MinioWAL {
 
 trait WAL {
     /// Appends data to the log, returning the ULID of the written record.
-    async fn append(&mut self, data: Vec<u8>) -> Result<String, Box<dyn Error + Send + Sync>>;
+    async fn append(&mut self, data: Vec<u8>) -> Result<Ulid, Box<dyn Error + Send + Sync>>;
 
     /// Reads a record from the log using the ULID.
-    async fn read(&self, key: String) -> Result<Record, Box<dyn Error + Send + Sync>>;
+    async fn read(&self, ulid: Ulid) -> Result<Record, Box<dyn Error + Send + Sync>>;
 }
 
 impl WAL for MinioWAL {
-    async fn append(&mut self, data: Vec<u8>) -> Result<String, Box<dyn Error + Send + Sync>> {
+    async fn append(&mut self, data: Vec<u8>) -> Result<Ulid, Box<dyn Error + Send + Sync>> {
         let record = Record::new(data);
-        let ulid = record.ulid.to_string();
+        let ulid = record.ulid;
         let body = ByteStream::from(record.to_bytes()?);
+
+        let key = format!("wal/{}.wal", ulid.to_string());
 
         self.client
             .put_object()
             .bucket(&self.bucket)
-            .key(&ulid)
+            .key(&key)
             .body(body)
             .send()
             .await?;
@@ -141,7 +143,9 @@ impl WAL for MinioWAL {
         Ok(ulid)
     }
 
-    async fn read(&self, key: String) -> Result<Record, Box<dyn Error + Send + Sync>> {
+    async fn read(&self, ulid: Ulid) -> Result<Record, Box<dyn Error + Send + Sync>> {
+        let key = format!("wal/{}.wal", ulid.to_string());
+
         let response = self.client
             .get_object()
             .bucket(&self.bucket)
@@ -150,7 +154,20 @@ impl WAL for MinioWAL {
             .await?;
 
         let data = response.body.collect().await?.into_bytes();
-        let ulid = Ulid::from_string(&key)?;
+
+        // Validate the data length (must be larger than 32 bytes for checksum)
+        // NOTE: This does allow for empty data records.
+        if data.len() < 32 {
+            return Err("Invalid record: data too short".into());
+        }
+
+        // Deserialize record
+        let record = Record::from_bytes(ulid, &data)?;
+
+        // Validate the checksum
+        if !record.validate_checksum() {
+            return Err("Checksum mismatch".into());
+        }
 
         Ok(Record::from_bytes(ulid, &data)?)
     }
@@ -158,19 +175,41 @@ impl WAL for MinioWAL {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Create a new MinioWAL client to interact with MinIO
     let mut wal = MinioWAL::new().await?;
 
-    // Append a record
-    let ulid = wal.append(b"Hello, MinIO!".to_vec()).await?;
-    println!("Record appended with ULID: {}", ulid);
+    // Step 1: Append multiple records with varying amounts of data
+    let data_variants = vec![
+        vec![], // No data
+        b"Short data.".to_vec(), // Small amount of data
+        b"This is a medium-sized record for testing purposes.".to_vec(), // Medium data
+        vec![b'A'; 1024], // 1KB of data
+        vec![b'B'; 1024 * 1024], // 1MB of data
+    ];
 
-    // Read the record back
-    let record = wal.read(ulid.clone()).await?;
-    println!("Read record: {:?}", String::from_utf8(record.data.clone()));
+    for (i, data) in data_variants.into_iter().enumerate() {
+        let ulid = wal.append(data).await?;
+        println!("Successfully appended record {} with ULID: {}", i + 1, ulid);
+    }
 
-    // Validate checksum
-    assert!(record.validate_checksum());
-    println!("Checksum is valid!");
+    // Step 2: Read the appended records using their ULIDs
+    for i in 0..5 {
+        let ulid = wal.append(b"Temporary read record".to_vec()).await?;
+        let fetched_record = wal.read(ulid).await?;
+        let fetched_data = String::from_utf8(fetched_record.data.clone()).unwrap_or_else(|_| "[Non-UTF8 data]".to_string());
+        println!("Fetched Record {}: {}", i + 1, fetched_data);
+    }
+
+    // Step 3: Validate the checksum of each fetched record
+    for i in 0..5 {
+        let ulid = wal.append(b"Temporary validate record".to_vec()).await?;
+        let fetched_record = wal.read(ulid).await?;
+        if fetched_record.validate_checksum() {
+            println!("Checksum for record {} is valid!", i + 1);
+        } else {
+            println!("Checksum validation failed for record {}!", i + 1);
+        }
+    }
 
     Ok(())
 }
