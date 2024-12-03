@@ -4,7 +4,6 @@ use std::{
     error::Error,
     io::{self, Read, Write},
 };
-use tokio;
 use ulid::Ulid;
 
 /// Represents a record in the WAL. ULID and checksum are useful and provide a predictable amount
