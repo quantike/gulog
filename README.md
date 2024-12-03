@@ -1,4 +1,4 @@
-# MinIO Write-Ahead Log (WAL) Example
+# `gulog`: A MinIO-backed Write-Ahead Log (WAL) Example
 
 This project demonstrates the implementation of a Write-Ahead Log (WAL) using MinIO as the backend for storing log records. The WAL is implemented with Rust, showcasing how to write, read, and validate records stored in MinIO. Each record is uniquely identified using a [ULID](https://github.com/ulid/spec) and includes data integrity validation with a SHA-256 checksum.
 
