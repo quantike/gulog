@@ -1,4 +1,8 @@
-use aws_sdk_s3::{config::{BehaviorVersion, Credentials, Region}, primitives::ByteStream, Client, Config};
+use aws_sdk_s3::{
+    config::{BehaviorVersion, Credentials, Region},
+    primitives::ByteStream,
+    Client, Config,
+};
 use sha2::{Digest, Sha256};
 use std::{
     error::Error,
@@ -99,19 +103,16 @@ impl MinioWAL {
         let config = Config::builder()
             .region(Region::new("us-east-1"))
             .endpoint_url("http://127.0.0.1:9000")
-            .credentials_provider(Credentials::new(
-                "admin", 
-                "password", 
-                None, 
-                None, 
-                "static"
-            ))
+            .credentials_provider(Credentials::new("admin", "password", None, None, "static"))
             .behavior_version(BehaviorVersion::latest())
             .build();
 
         let client = Client::from_conf(config);
 
-        Ok(Self { client, bucket: "gulog-dev".to_string() })
+        Ok(Self {
+            client,
+            bucket: "gulog-dev".to_string(),
+        })
     }
 }
 
@@ -146,7 +147,8 @@ impl WAL for MinioWAL {
     async fn read(&self, ulid: Ulid) -> Result<Record, Box<dyn Error + Send + Sync>> {
         let key = format!("wal/{}.wal", ulid.to_string());
 
-        let response = self.client
+        let response = self
+            .client
             .get_object()
             .bucket(&self.bucket)
             .key(&key)
@@ -180,11 +182,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // Step 1: Append multiple records with varying amounts of data
     let data_variants = vec![
-        vec![], // No data
-        b"Short data.".to_vec(), // Small amount of data
+        vec![],                                                          // No data
+        b"Short data.".to_vec(),                                         // Small amount of data
         b"This is a medium-sized record for testing purposes.".to_vec(), // Medium data
-        vec![b'A'; 1024], // 1KB of data
-        vec![b'B'; 1024 * 1024], // 1MB of data
+        vec![b'A'; 1024],                                                // 1KB of data
+        vec![b'B'; 1024 * 1024],                                         // 1MB of data
     ];
 
     for (i, data) in data_variants.into_iter().enumerate() {
@@ -196,7 +198,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     for i in 0..5 {
         let ulid = wal.append(b"Temporary read record".to_vec()).await?;
         let fetched_record = wal.read(ulid).await?;
-        let fetched_data = String::from_utf8(fetched_record.data.clone()).unwrap_or_else(|_| "[Non-UTF8 data]".to_string());
+        let fetched_data = String::from_utf8(fetched_record.data.clone())
+            .unwrap_or_else(|_| "[Non-UTF8 data]".to_string());
         println!("Fetched Record {}: {}", i + 1, fetched_data);
     }
 
