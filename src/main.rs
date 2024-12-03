@@ -116,6 +116,7 @@ impl MinioWAL {
     }
 }
 
+#[allow(clippy::upper_case_acronyms)]
 trait WAL {
     /// Appends data to the log, returning the ULID of the written record.
     async fn append(&mut self, data: Vec<u8>) -> Result<Ulid, Box<dyn Error + Send + Sync>>;
