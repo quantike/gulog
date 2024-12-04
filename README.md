@@ -14,14 +14,10 @@ This project demonstrates the implementation of a Write-Ahead Log (WAL) using Mi
 
 ## Setup
 
-1. **Install Dependencies**:
-   - Add the following dependencies to your `Cargo.toml`:
-     ```toml
-     [dependencies]
-     aws-sdk-s3 = "*"
-     sha2 = "*"
-     tokio = { version = "*", features = ["full"] }
-     ulid = "*"
+1. **Build the binary**:
+   - Build the Rust project using Cargo
+     ```sh
+     cargo build # --release
      ```
 
 2. **Run MinIO Locally**:
@@ -42,11 +38,12 @@ The main function in this project demonstrates the following:
 2. **Appending Records**: Several records with different data sizes are appended to MinIO. Each record gets a unique ULID.
 3. **Reading Records**: The records are read back using their ULID, and their content is printed.
 4. **Validating Checksums**: The checksum of each record is validated to ensure data integrity.
+5. **Accessing the Last Record**: Paginates the MinIO bucket to find the last record, and recovers the WAL from there. Useful for recovery.
 
 To run the code:
 
 ```sh
-cargo run
+cargo run # --release
 ```
 
 ### Example Output
@@ -66,21 +63,14 @@ Checksum for record 1 is valid!
 
 ### `Record` Struct
 - Represents a record in the WAL, consisting of:
-  - `ulid`: Unique identifier for each record.
+  - `ulid`: Unique identifier for each record. ULIDs were chosen instead of a zero-indexed offset because of they encode timestamp information and (nearly) guarentee uniqueness within millisecond precision (1.21e+24 unique ULIDs per millisecond [per the docs](https://github.com/ulid/spec)).
   - `data`: The payload of the record.
-  - `checksum`: SHA-256 checksum for data integrity.
-
-- Key Methods:
-  - **`new(data: Vec<u8>) -> Self`**: Creates a new `Record` with a ULID and checksum.
-  - **`validate_checksum(&self) -> bool`**: Validates the checksum of the record.
-  - **`to_bytes(&self) -> io::Result<Vec<u8>>`**: Serializes the record to bytes.
-  - **`from_bytes(ulid: Ulid, bytes: &[u8]) -> io::Result<Self>`**: Deserializes bytes into a `Record`.
+  - `checksum`: SHA-256 checksum for data integrity. A 32 byte `u8` array.
+- `ulid`s are used to create MinIO bucket keys via `ulid.to_string()`, which returns a Crockford Base32 encoded string that represents this Ulid.
+- The `checksum` is used to guarentee data integrity. Because we rely on an external service (MinIO/S3), we want to make sure what we get back from the distributed storage engine, matches our expectations.
 
 ### `MinioWAL` Struct
 - Represents the Write-Ahead Log backed by MinIO.
-- Key Methods:
-  - **`append(&mut self, data: Vec<u8>) -> Result<Ulid, Box<dyn Error + Send + Sync>>`**: Appends a record to the WAL and returns its ULID.
-  - **`read(&self, ulid: Ulid) -> Result<Record, Box<dyn Error + Send + Sync>>`**: Reads a record from the WAL using its ULID.
 
 ### Main Function
 - Demonstrates appending records of varying sizes, reading them back, and validating their checksums.
@@ -92,15 +82,21 @@ The MinIO endpoint and credentials are configured directly in the `MinioWAL::new
 - This example uses the `aws-sdk-s3` crate to communicate with MinIO. The SDK is compatible with MinIO as it implements the S3 API.
 - Ensure your MinIO instance is up and running before executing the code.
 
+## Upcoming Work
+- Timestamps: because we use ULID, there is a host of timestamp-related optimizations we can do (windows, closest-to, before, after).
+- 
+
 ## License
 This project is licensed under the MIT License.
 
 ## Contributions
-Contributions are welcome! Feel free to open issues or submit pull requests to improve the project.
+Contributions are welcome! Feel free to open issues or submit pull requests to improve the project. I think the biggest places to improve are:
+- Last record retrieval
+- Batch append
+- Batch read
+- Conditional writes (newish S3 feature, also available in MinIO)
 
 ## Acknowledgments
-- [MinIO](https://min.io/) for providing a high-performance object storage system.
-- [ULID](https://github.com/ulid/spec) for generating unique identifiers.
-- [Rust](https://www.rust-lang.org/) community for making this project possible.
-
-
+- [Building a distributed log using S3 (under 150 lines of Go)](https://avi.im/blag/2024/s3-log/) for providing an easy to understand, digestible intro to disaggregated storage concepts. Go subscribe to their blog.
+- [s3-log](https://avi.im/blag/2024/s3-log/) for providing a nice go implementation.
+- [MinIO](https://min.io/) for providing a high-performance object storage system that let's me run it locally and emulate S3 for free.
