@@ -123,6 +123,9 @@ trait WAL {
 
     /// Reads a record from the log using the ULID.
     async fn read(&self, ulid: Ulid) -> Result<Record, Box<dyn Error + Send + Sync>>;
+
+    /// Finds the last record in the WAL by finding the largest ULID.
+    async fn last_record(&self) -> Result<Record, Box<dyn Error + Send + Sync>>;
 }
 
 impl WAL for MinioWAL {
@@ -173,6 +176,45 @@ impl WAL for MinioWAL {
 
         Ok(Record::from_bytes(ulid, &data)?)
     }
+
+    async fn last_record(&self) -> Result<Record, Box<dyn Error + Send + Sync>> {
+        // List objects in S3 bucket with the "wal/" prefix
+        let mut paginator = self
+            .client
+            .list_objects_v2()
+            .bucket(&self.bucket)
+            .prefix("wal/")
+            .into_paginator()
+            .send();
+
+        let mut max_ulid: Option<Ulid> = None;
+
+        // Iterate through pages of objects
+        while let Some(page) = paginator.next().await {
+            let page = page?;
+            if let Some(contents) = page.contents {
+                for obj in contents {
+                    if let Some(key) = obj.key {
+                        // Extract the ULID from the key
+                        if let Some(ulid_str) = key.strip_prefix("wal/").and_then(|s| s.strip_suffix(".wal")) {
+                            if let Ok(ulid) = Ulid::from_string(ulid_str) {
+                                // Update the max ULID if the current one is larger
+                                if max_ulid.map_or(true, |curr| ulid > curr) {
+                                    max_ulid = Some(ulid);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Check if we found a ULID
+        let max_ulid = max_ulid.ok_or("WAL is empty")?;
+
+        // Read the record with the largest ULID
+        self.read(max_ulid).await
+    }
 }
 
 #[tokio::main]
@@ -194,16 +236,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         println!("Successfully appended record {} with ULID: {}", i + 1, ulid);
     }
 
-    // Step 2: Read the appended records using their ULIDs
-    for i in 0..5 {
-        let ulid = wal.append(b"Temporary read record".to_vec()).await?;
-        let fetched_record = wal.read(ulid).await?;
-        let fetched_data = String::from_utf8(fetched_record.data.clone())
-            .unwrap_or_else(|_| "[Non-UTF8 data]".to_string());
-        println!("Fetched Record {}: {}", i + 1, fetched_data);
+    // Step 2: Read the last appended record
+    match wal.last_record().await {
+        Ok(last_record) => {
+            let fetched_data = String::from_utf8(last_record.data.clone())
+                .unwrap_or_else(|_| "[Non-UTF8 data]".to_string());
+            let preview = if fetched_data.len() > 32 {
+                format!("{}...", &fetched_data[..32])
+            } else {
+                fetched_data
+            };
+            println!(
+                "Last Record: ULID: {}, Data: {}",
+                last_record.ulid, preview
+            );
+        }
+        Err(e) => {
+            println!("Failed to fetch last record: {}", e);
+        }
     }
 
-    // Step 3: Validate the checksum of each fetched record
+    // Step 3: Validate the checksum of the last record
+    match wal.last_record().await {
+        Ok(last_record) => {
+            if last_record.validate_checksum() {
+                println!("Checksum for the last record is valid!");
+            } else {
+                println!("Checksum validation failed for the last record!");
+            }
+        }
+        Err(e) => {
+            println!("Failed to fetch last record for checksum validation: {}", e);
+        }
+    }
+
+    // Step 4: Fetch and validate additional records (optional example logic)
     for i in 0..5 {
         let ulid = wal.append(b"Temporary validate record".to_vec()).await?;
         let fetched_record = wal.read(ulid).await?;
