@@ -196,7 +196,10 @@ impl WAL for MinioWAL {
                 for obj in contents {
                     if let Some(key) = obj.key {
                         // Extract the ULID from the key
-                        if let Some(ulid_str) = key.strip_prefix("wal/").and_then(|s| s.strip_suffix(".wal")) {
+                        if let Some(ulid_str) = key
+                            .strip_prefix("wal/")
+                            .and_then(|s| s.strip_suffix(".wal"))
+                        {
                             if let Ok(ulid) = Ulid::from_string(ulid_str) {
                                 // Update the max ULID if the current one is larger
                                 if max_ulid.map_or(true, |curr| ulid > curr) {
@@ -246,10 +249,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             } else {
                 fetched_data
             };
-            println!(
-                "Last Record: ULID: {}, Data: {}",
-                last_record.ulid, preview
-            );
+            println!("Last Record: ULID: {}, Data: {}", last_record.ulid, preview);
         }
         Err(e) => {
             println!("Failed to fetch last record: {}", e);
